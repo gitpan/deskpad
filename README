@@ -1,0 +1,38 @@
+Deskpad Installation Notes
+
+
+    Deskpad is a rather lightweight calendar program written in
+    Perl/Tk. In addition to Perl, you'll need to have installed the 
+    Perl/Tk GUI libraries on your system.  There are source code and
+    binary packages at: http://www.cpan.org/.
+
+    Install by copying the "deskpad" program into your home directory
+    or any directory that you have write permissions in.  Copy the
+    man page, "deskpad.man," to /usr/local/man/man1/deskpad.1.  You
+    will need to be logged in as the superuser to install the man
+    page.
+
+    If the program prints an error message like: 
+
+      ./deskpad: file not found
+
+    then you will need to edit the first line of the script
+    with the path name of the system's perl interpreter. Usually, 
+    this is the output of "which perl".
+
+    Usage is straightforward. The program presents a window with a
+    calendar of the current month. Clicking on a day opens a text
+    editor where you can enter any text you like to be associated
+    with that day. Selecting 'Save' from either the menu or the 
+    buttons at the bottom of the editor save the text to the calendar's 
+    data file.
+
+    Refer to the file "deskpad.txt" for further information.
+
+    Copyright and Licensing
+
+    This program is free software. Please see the file COPYING for
+    details.
+
+    If you find any bugs, please let the author, 
+    <rkiesling@earthlink.net> know about them.

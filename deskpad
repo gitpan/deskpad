@@ -1,0 +1,1353 @@
+#!/usr/bin/perl
+my $RCSRevKey = '$Revision: 0.73 $';
+$RCSRevKey =~ /Revision: (.*?) /;
+$VERSION=$1;
+
+=head1 NAME
+
+deskpad - A desktop calendar program like xcalendar.
+
+=head1 SYNOPSIS
+
+./deskpad &
+
+=head1 DESCRIPTION
+
+Deskpad is a rather lightweight calendar program written in Perl
+using the Perl/Tk GUI libraries.  
+
+Usage is straightforward.  The program presents a window with a
+calendar of the current month.  Clicking on a day opens a text editor
+where you can enter any text you like to be associated with that day.
+Selecting "Save," "Delete," or "Close" from either the menu or the
+buttons at the bottom of the editor save the text to the calendar's
+data file.
+
+The current date and days that have events in the database (see below)
+are highlighted with bold cell borders.
+
+=head1 CALENDAR DATA
+
+The program creates a directory named ".schedule" in your HOME
+directory, and keeps its data there.  The calendar data is ASCII
+formatted with XML tags.  At present, the program recognizes the tags
+"day," "month," "date," "year," and "text."
+
+=head1 COPYRIGHT
+
+This program is free software.  Please refer to the file
+COPYING for details.
+
+=head1 VERSION INFO
+
+  $Id: deskpad.pl,v 0.73 2002/09/08 00:58:53 kiesling Exp $
+
+=head1 CREDITS
+
+  Written by: Robert Allan Kiesling <rkiesling@earthlink.net>
+
+  Perl/Tk by Nick Ing-Simmons.
+
+  Perl by Larry Wall and many others.
+
+=cut
+
+use Tk;
+use Tk::Canvas;
+use Tk::TextUndo;
+use IO::File;
+@ISA = qw(Tk::Canvas);
+
+my (@abbrevdays) =  ( "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" );
+my (@fulldays) = ( "Sunday", "Monday", "Tuesday", "Wednesday",
+		 "Thursday", "Friday", "Saturday" );
+
+my (@months) = ( "", "January", "February", "March", "April", "May",
+		 "June", "July", "August", "September", "October",
+		 "November", "December" );
+
+my @gridtags;   # list of tags on calendar grid
+my @daytags;    # list of tags for dates in grid
+
+# valid xml tags
+my (@tags) = ( "xml", "day", "month", "date", "year", "text" );
+
+# identifiers for calendar title widgets
+my $monthyeartitle;
+my $nextmonthbutton;
+my $nextyearbutton;
+my $previousmonthbutton;
+my $previousyearbutton;
+
+# OS-specific file and directory names.
+my $db_handle;  # file handle for db.
+my $db_directory;
+my $db_file;
+my $tmp_directory;
+
+  $db_directory = ".schedule";
+  $db_file = "sched_events.xml";
+  $tmp_directory = "/tmp/";   # directory for temporary files.
+
+# calendar cell dimensions, in pixels.
+my $large_cellwidth = 80;
+my $large_cellheight = 100;
+my $small_cellwidth = 40;
+my $small_cellheight = 50;
+
+# option to toggle large or small month display.
+my $largecelloption;
+
+# Backgroundcolors
+my $entrybgcolor = 'white';
+my $monthbgcolor = 'lightgray';
+
+# calendar menus
+my $filemenu;
+my $viewmenu;
+my $editmenu;
+my $helpmenu;
+
+my $calendar;  # instance of calendar object of the displayed month
+
+my $defaulttextfont="*-courier-medium-r-*-*-12-*";
+my $menufont="*-helvetica-medium-r-*-*-12-*";
+my $smalltitlefont="*-helvetica-medium-r-*-*-14-*";
+my $titlefont="*-helvetica-medium-r-*-*-24-*";
+my $boldfont="*-helvetica-bold-r-*-*-12-*";
+
+my $textbgcolor = 'white';
+my $textfgcolor = 'black';
+
+my @days; #array of day objects.
+my @day_eds = undef;  # dynamic array of day_editor references
+
+# day class.
+sub day_new {
+    my $class = ref 'Exporter';
+    my $self = {
+	$year = '',
+	$month = '',
+	$day = '',
+	$cal_x_org = '',
+	$cal_y_org = '',
+	$cal_x_max = '',
+	$cal_y_max = '',
+	$date_text = '',
+	$text = '',
+	$reserved
+	};
+    bless( $self, $class );
+    return $self;
+}
+
+sub day_editor_new {
+    my $class = ref 'Exporter';
+    my $self = {
+		name => 'Day Editor',
+		month => $calendar -> {month},
+		day => $calendar -> {day},
+		year => $calendar -> {year},
+		monthname => $calendar -> {monthname},
+		menu => undef,
+		filemenu => undef,
+		editmenu => undef,
+		frame => undef,
+		buttonpanel => undef,
+		savebutton => undef,
+		closebutton => undef,
+		eventframe => undef,
+		# start and end positions in file
+		eventtext => undef
+	    };
+    bless( $self, $class );
+    return $self;
+}
+
+sub init_widgets {
+    my ($large_cells) = @_;
+    if ($large_cells ==2) {
+      &getrootwindow;
+      return;
+    }
+    $self -> {frame} = new MainWindow;
+    $self -> {menu} = ($self -> {frame}) -> Menu( -type => 'menubar')
+	-> pack( -fill => 'x');
+    $filemenu = ($self -> {menu}) -> Menu;
+    $editmenu = ($self -> {menu}) -> Menu;
+    $viewmenu = ($self -> {menu}) -> Menu;
+    $helpmenu = ($self -> {menu}) -> Menu;
+
+    $self -> {titleframe} = ($self -> {frame}) ->
+	Frame( -container => 0,
+	       -width => 640,
+	       -height => 50) -> pack( -side => 'top', -fill => 'none',
+				       -expand => 'no', -anchor => 'c' );
+    &title_frame();
+
+    if( $large_cells == '1' ) {
+	$self -> {canvas} = $self -> {frame} -> Canvas( -height => 650,
+						    -width => 680 );
+    } elsif ( $large_cells == '0' ) {
+	$self -> {canvas} = $self -> {frame} -> Canvas( -height => 400,
+						    -width => 400 );
+    }
+    $self -> {canvas} -> pack;
+
+    $self -> {menu} -> add ( 'cascade',
+			     -font => $menufont,
+			     -label => 'File',
+			     -menu => $filemenu);
+    $self -> {menu} -> add ( 'cascade',
+			     -font => $menufont,
+			     -label => 'Edit',
+			     -menu => $editmenu);
+    $self -> {menu} -> add ( 'cascade',
+			     -font => $menufont,
+			     -label => 'View',
+			     -menu => $viewmenu);
+    $self -> {menu} -> add('separator');
+    $self -> {menu} -> add ( 'cascade',
+			     -font => $menufont,
+			     -label => 'Help',
+			     -menu => $helpmenu);
+
+    $filemenu -> add( 'command', -label => 'Close...',
+		      -font => $menufont,
+		      -state => 'normal',
+		      -accelerator => 'Alt-W',
+		      -command => [\&exit_program]);
+    $self -> {frame} -> bind('<Alt-w>', [\&exit_program]);
+    $editmenu -> add( 'command', -label => 'Find...',
+		      -font => $menufont,
+		       -state => 'normal',
+		      -accelerator => 'Alt-F',
+		      -command => sub{user_find_string()} );
+    $self -> {frame} -> bind( '<Alt-f>', sub{user_find_string()});
+    $viewmenu -> add( 'command', -label => 'Next month',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => [\&next_month]);
+    $viewmenu -> add( 'command', -label => 'Last month',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => [\&previous_month]);
+    $viewmenu -> add('separator');
+    $viewmenu -> add( 'command', -label => 'Next year',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => [\&next_year]);
+    $viewmenu -> add( 'command', -label => 'Last year',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => [\&previous_year]);
+    $viewmenu -> add('separator');
+    $viewmenu -> add( 'command', -label => 'Large calendar',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => [\&large_calendar]);
+    $viewmenu -> add( 'command', -label => 'Small calendar',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => [\&small_calendar]);
+
+    $helpmenu -> add( 'command', -label => 'About...',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => sub{about()});
+    $helpmenu -> add( 'command', -label => 'Help...',
+				 -font => $menufont,
+				 -state => 'normal',
+				 -command => sub{self_help()});
+#
+#     bindings for pop-ups
+#
+    ($self -> {frame}) ->
+	bind('<Button-1>', [\&day_editor, $self, Ev('X'), Ev('Y')]);
+    &drawmonthgrid( $large_cells );
+    &insert_day_numbers( $large_cells );
+}
+
+sub drawmonthgrid {
+
+    my ($large_cells) = @_;
+
+    my $cellwidth; my $cellheight;
+
+    my $c = ($self -> {canvas});
+    $cellwidth = $large_cellwidth if ( $large_cells == '1');
+    $cellheight = $large_cellheight if ( $large_cells == '1' );
+    $cellwidth = $small_cellwidth if ( $large_cells == '0' );
+    $cellheight = $small_cellheight if ( $large_cells == '0' );
+
+    my $xcells = 7; my $ycells = 6;
+    my $xorigin = 60; my $yorigin = 40;
+    # y origin of weekday line
+
+    my $wd_y_origin = $yorigin - 10;
+    my $wd_xtra_space;
+    $wd_xtra_space = 35  if ( $large_cells == '1' );
+    $wd_xtra_space = 25  if ( $large_cells == '0' );
+    my $i; my $j;
+    my $x1; my $x2; my $y1; my $y2;
+    my $tagno = 1;
+
+    #horizontal
+    for ( $i = 0; $i <= $xcells; $i++ ) {
+	$c -> createLine( $xorigin + ($i * $cellwidth),
+			  $yorigin,
+			  $xorigin + ($i * $cellwidth),
+			  $yorigin + ($ycells * $cellheight),
+			  -width => 2, -fill => 'black' );
+    }
+
+    #vertical lines
+    for ( $i = 0; $i <= $ycells; $i++ ) {
+	$c -> createLine( $xorigin,
+			  $yorigin  + ($i * $cellheight), 
+			  $xorigin + ($xcells * $cellwidth),
+			  $yorigin + ($i * $cellheight),
+			  -width => 2, -fill => 'black' );
+    }
+
+    # days of week
+    for ( $i = 0; $i < $xcells; $i = $i + 1 ) {
+	$c -> createText ( $xorigin + $wd_xtra_space + ( $i * $cellwidth ),
+			   $wd_y_origin,
+			   -font => $menufont,
+			   -text => $abbrevdays[$i]);
+    }
+}
+
+sub title_frame {
+
+    if ( $previousyearbutton ) { $previousyearbutton -> DESTROY; }
+    if ( $previousmonthbutton ) { $previousmonthbutton -> DESTROY; }
+    if ( $monthyeartitle ) { $monthyeartitle -> DESTROY; }
+    if ( $nextmonthbutton ) { $nextmonthbutton -> DESTROY; }
+    if ( $nextyearbutton ) { $nextyearbutton -> DESTROY; }
+
+    $previousyearbutton =
+	$self -> {titleframe} -> Button( -text => '<<',
+					 -command => [\&previous_year])
+	-> pack(  -side => 'left', -anchor => 'w'  );
+    $previousmonthbutton =
+    $self -> {titleframe} -> Button( -text => '<',
+				     -command => [\&previous_month])
+	-> pack(  -side => 'left', -anchor => 'w'  );
+    $monthyeartitle =
+	$self -> {titleframe} -> Label ( -text => $calendar -> {monthname} .
+				     ", " . $calendar -> {year},
+				     -font => $titlefont ) ->
+					 pack( -anchor => 'c',
+					       -side => 'left',
+					       -ipadx => 10,
+					       -ipady => 5);
+    $nextmonthbutton =
+    $self -> {titleframe} ->
+		 Button( -text => '>',
+			 -command => [\&next_month])
+		     -> pack( -side => 'left',  anchor => 'e' );
+    $nextyearbutton =
+    $self -> {titleframe} ->
+		 Button( -text => '>>',
+			 -command => [\&next_year] )
+		     -> pack( -side => 'left',  anchor => 'e' );
+}
+
+sub insert_day_numbers {
+
+    my ($large_cells ) = @_;
+
+    my $c = $self -> {canvas};
+    $smallgticon = $c -> Bitmap( -data => $gt_data );
+    my $cellwidth; my $cellheight;
+    $cellwidth = $large_cellwidth if ( $large_cells == '1');
+    $cellheight = $large_cellheight if ( $large_cells == '1' );
+    $cellwidth = $small_cellwidth if ( $large_cells == '0' );
+    $cellheight = $small_cellheight if ( $large_cells == '0' );
+    my $xcells = 7; my $ycells = 6;
+    my $xorigin = 60; my $yorigin = 40;
+    my $i; my $j;
+    # offset from top left of date string in cell
+    my $date_x;
+    $date_x = 60 if ( $large_cells == '1' );
+    $date_x = 30 if ( $large_cells == '0' );
+    my $date_y = 15;
+    my $date = '1';
+    my $firstday = $calendar -> {startday};
+    my $tagno = 1;
+    my $m; my $d; my $y;
+
+    #do the top row first
+    for ( $i = ( $firstday - 1) ; $i < $xcells; $i++ ) {
+	$days[$date] = day_new();
+	$days[$date] -> {year} = $calendar -> {year};
+	$days[$date] -> {month} = $calendar -> {month};
+	$days[$date] -> {day} = $date;
+	$days[$date] -> {date_text}  = 'day' . $date;
+	$days[$date] -> {cal_x_org} =  $xorigin + ( $i * $cellwidth );
+	$days[$date] -> {cal_y_org} =  $yorigin;
+	$days[$date] -> {cal_x_max} =
+	    $xorigin + ( $i * $cellwidth ) + $cellwidth;
+	$days[$date] -> {cal_y_max} =  $yorigin + $cellheight;
+
+	$c -> createText ( $xorigin + $date_x + ( $i * $cellwidth ),
+			   $yorigin + $date_y,
+			   -font => $menufont,
+			   -tags => $days[$date] -> {date_text},
+			   -text => $date++ );
+    }
+
+    # then do the rest
+    for ( $i = 1; $i <= $ycells; $i++ ) {
+	for ( $j = 0; $j < $xcells; $j++ ) {
+	    $days[$date] = day_new();
+	    $days[$date] -> {year} = $calendar -> {year};
+	    $days[$date] -> {month} = $calendar -> {month};
+	    $days[$date] -> {day} = $date;
+	    $days[$date] -> {date_text}  = 'day' . $date;
+
+	    $days[$date] -> {cal_x_org} =  $xorigin + ( $j * $cellwidth );
+	    $days[$date] -> {cal_y_org} =  $yorigin + ( $i * $cellheight );
+	    $days[$date] -> {cal_x_max} =
+		$xorigin + ( $j * $cellwidth ) + $cellwidth;
+	    $days[$date] -> {cal_y_max} =
+		$yorigin + ( $i * $cellheight ) + $cellheight ;
+
+	    $c -> createText ( $xorigin + $date_x + ( $j * $cellwidth ),
+			       $yorigin + $date_y + ( $i * $cellheight),
+			       -font => $menufont,
+			       -tags => $days[$date] -> {date_text},
+			       -text => $date++ );
+	    if ( $date > ($calendar -> {totaldays})) {
+		goto DONE;
+	    }
+	}
+    }
+    DONE: $c -> pack;
+    &show_today( $large_cells );
+    &show_event_days( $large_cells, $calendar );
+}
+
+sub show_today {
+    my ( $large_cells ) = @_;
+
+    my $cellwidth; my $cellheight;
+    $cellwidth = $large_cellwidth if ( $large_cells == '1');
+    $cellheight = $large_cellheight if ( $large_cells == '1' );
+    $cellwidth = $small_cellwidth if ( $large_cells == '0' );
+    $cellheight = $small_cellheight if ( $large_cells == '0' );
+    my $date_x;
+    $date_x = 60 if ( $large_cells == '1' );
+    $date_x = 30 if ( $large_cells == '0' );
+    my $date_y = 15;
+
+    if ( ( $calendar -> {month} == (localtime)[4] + 1 ) and
+	 ( $calendar -> {year} == (localtime)[5] + 1900 ) )  {
+      $today = (localtime)[3];
+	( $self -> {canvas} ) ->
+	    createText ( ($days[$today] -> {cal_x_org}) + $date_x,
+			 ($days[$today] -> {cal_y_org}) + $date_y,
+			 -font => $menufont,
+			 -text => $today,
+			 -fill => 'white' );
+	( $self -> {canvas} ) ->
+	    createLine ( ($days[$today] -> {cal_x_org}) + 1,
+			 ($days[$today] -> {cal_y_org}) + 1,
+			 ($days[$today] -> {cal_x_org}) + $cellwidth - 1,
+			 ($days[$today] -> {cal_y_org}) + 1,
+			 -width => 1, -fill => 'black' );
+	( $self -> {canvas} ) ->
+	    createLine ( ($days[$today] -> {cal_x_org}) + 1,
+			 ($days[$today] -> {cal_y_org}) + $cellheight - 2,
+			 ($days[$today] -> {cal_x_org}) + $cellwidth - 1,
+			 ($days[$today] -> {cal_y_org}) + $cellheight - 2,
+			 -width => 1, -fill => 'black' );
+	( $self -> {canvas} ) ->
+	    createLine ( ($days[$today] -> {cal_x_org}) + 1,
+			 ($days[$today] -> {cal_y_org}) + 1,
+			 ($days[$today] -> {cal_x_org}) + 1,
+			 ($days[$today] -> {cal_y_org}) + $cellheight - 1,
+			 -width => 1, -fill => 'black' );
+	( $self -> {canvas} ) ->
+	    createLine ( ($days[$today] -> {cal_x_org}) + $cellwidth - 2,
+			 ($days[$today] -> {cal_y_org}) + 1,
+			 ($days[$today] -> {cal_x_org}) + $cellwidth - 2,
+			 ($days[$today] -> {cal_y_org}) + $cellheight - 1,
+			 -width => 1, -fill => 'black' );
+    }
+}
+
+sub show_event_days {
+    my ($large_cells, $calendar) = @_;
+
+    my ( $cellwidth, $cellheight, $i );
+    $cellwidth = $large_cellwidth if ( $large_cells == '1');
+    $cellheight = $large_cellheight if ( $large_cells == '1' );
+    $cellwidth = $small_cellwidth if ( $large_cells == '0' );
+    $cellheight = $small_cellheight if ( $large_cells == '0' );
+    my $date_x;
+    $date_x = 60 if ( $large_cells == '1' );
+    $date_x = 30 if ( $large_cells == '0' );
+    my $date_y = 15;
+
+    for( $i = 1; $i <= $calendar -> {totaldays}; $i++ ) {
+      if (&find_db_day( $calendar -> {month}, $i,
+			$calendar -> {year} ) ne '' ) {
+	( $self -> {canvas} ) ->
+	  createLine ( ($days[$i] -> {cal_x_org}) + 1,
+		       ($days[$i] -> {cal_y_org}) + 1,
+		       ($days[$i] -> {cal_x_org}) + $cellwidth - 1,
+		       ($days[$i] -> {cal_y_org}) + 1,
+		       -width => 1, -fill => 'black' );
+	( $self -> {canvas} ) ->
+	  createLine ( ($days[$i] -> {cal_x_org}) + 1,
+		       ($days[$i] -> {cal_y_org}) + $cellheight - 2,
+		       ($days[$i] -> {cal_x_org}) + $cellwidth - 1,
+		       ($days[$i] -> {cal_y_org}) + $cellheight - 2,
+		       -width => 1, -fill => 'black' );
+	( $self -> {canvas} ) ->
+	  createLine ( ($days[$i] -> {cal_x_org}) + 1,
+		       ($days[$i] -> {cal_y_org}) + 1,
+		       ($days[$i] -> {cal_x_org}) + 1,
+		       ($days[$i] -> {cal_y_org}) + $cellheight - 1,
+		       -width => 1, -fill => 'black' );
+	( $self -> {canvas} ) ->
+	  createLine ( ($days[$i] -> {cal_x_org}) + $cellwidth - 2,
+		       ($days[$i] -> {cal_y_org}) + 1,
+		       ($days[$i] -> {cal_x_org}) + $cellwidth - 2,
+		       ($days[$i] -> {cal_y_org}) + $cellheight - 1,
+		       -width => 1, -fill => 'black' );
+      }
+  }
+}
+
+sub previous_month {
+    my $month = $calendar -> {month};
+    my $year = $calendar -> {year};
+
+    if ( $month == 1 ) {
+	$month = 12;
+	$year = $year - 1;
+    } else {
+	$month--;
+    }
+
+    &clear_calendar();
+    $calendar -> DESTROY;
+    $calendar = &new_calendar( $month, $year );
+    &title_frame();
+    &drawmonthgrid( $largecelloption );
+    &insert_day_numbers();
+}
+
+sub next_month {
+    my $month = $calendar -> {month};
+    my $year = $calendar -> {year};
+
+    if ( $month == 12 ) {
+	$month = 1;
+	$year = $year + 1;
+    } else {
+	$month++;
+    }
+    &clear_calendar();
+    $calendar -> DESTROY;
+    $calendar = &new_calendar( $month, $year );
+    &title_frame();
+    &drawmonthgrid( $largecelloption );
+    &insert_day_numbers();
+}
+
+sub next_year {
+    my $year = $calendar -> {year} + 1;
+    my $month = $calendar -> {month};
+    &clear_calendar();
+    $calendar -> DESTROY;
+    $calendar = &new_calendar( $month, $year );
+    &title_frame();
+    &drawmonthgrid( $largecelloption );
+    &insert_day_numbers();
+}
+
+sub previous_year {
+    my $year = $calendar -> {year} - 1;
+    my $month = $calendar -> {month};
+
+    &clear_calendar;
+    $calendar -> DESTROY;
+    $calendar = &new_calendar( $month, $year );
+    &title_frame();
+    &drawmonthgrid( $largecelloption );
+    &insert_day_numbers();
+}
+
+sub clear_calendar {
+    foreach $date (@days) {
+	( $self -> {canvas} ) -> delete('all');
+    }
+}
+
+sub canvasmenu {
+    my $callback = shift;
+    my $self = shift;
+    my $X = shift;
+    my $Y = shift;
+    $self -> {menu} -> post( $X, $Y );
+}
+
+sub day_editor {
+    my ($callback, $self, $X, $Y) = @_;
+    my ( $day, $de, $rec, $m, $d, $y );
+
+    $day = &day_select( $X, $Y );
+    if( $day == 0 ) {
+	return;
+    }
+
+    foreach $de (@day_eds) {
+	if ( ! defined( $de -> {frame}) ) {
+	    $de = &day_editor_new();
+	    last;
+	}
+    }
+
+    $de -> {day} = $day -> {day};
+    $de -> {month} = $day -> {month};
+    $de -> {year} = $day -> {year};
+    &init_day_editor_widgets( $de );
+    $d = $day -> {day};
+    $m = $day -> {month};
+    $y = $day -> {year};
+
+    $rec =
+	&find_db_day( $m, $d, $y );
+    my $matched_text = &field( 'text', $rec );
+    ( $de -> {eventtext} ) -> insert( 'end', $matched_text ) if $matched_text;
+}
+
+sub init_db {
+  my ($home_dir, $q_filename);
+  $home_dir = $ENV{ "HOME" };
+  $q_filename = $home_dir . "/" . $db_directory . "/" . $db_file;
+  if ( ! -d $home_dir . "/" . $db_directory ) {
+    mkdir ( ( $home_dir . "/" . $db_directory ), 022 ) || warn
+      "Can\'t create schedule directory: $!\n";
+    chmod( 0700,  $home_dir . "/" . $db_directory );
+   }
+
+  if( ! -f $q_filename ) {
+    printf STDERR "Creating new database file $q_filename.\n";
+    # Create file if necessary.
+    open DB_FILE, ">$q_filename" or 
+      die "Couldn't create $q_filename: $!\n";
+    close DB_FILE;
+  }
+}
+
+sub init_day_editor_widgets {
+
+    my $d = shift;
+    $d -> {frame} = new MainWindow;
+    ($d -> {frame})
+	-> title( $months[$d -> {month}] . " " . $d -> {day} . ", " .
+		  $d -> {year} );
+
+    $d -> {menu} = ($d -> {frame}) -> Menu( -type => 'menubar' )
+	-> pack( -fill => 'x' );
+    $d -> {filemenu} = ( $d -> {menu} ) -> Menu;
+    $d -> {editmenu} = ( $d -> {menu} ) -> Menu;
+    $d -> {menu} -> add ( 'cascade',
+			  -font => $menufont,
+			  -label => 'File',
+			  -menu => $d -> {filemenu});
+    $d -> {menu} -> add ( 'cascade',
+			  -font => $menufont,
+			  -label => 'Edit',
+			  -menu => $d -> {editmenu});
+
+     ( $d -> {filemenu} )
+	 -> add( 'command', -label => 'Save',
+		 -font => $menufont,
+		 -state => 'normal',
+		 -accelerator => 'Alt-S',
+		 -command => [\&save_day, $d -> {month},
+			      $d -> {day},
+			      $d -> {year},
+			      $d]);
+     ( $d -> {filemenu} ) -> add( 'command', -label => 'Delete',
+				-font => $menufont,
+				-state => 'normal',
+				  -accelerator => 'Alt-D',
+		-command => sub{&delete_day($d)});
+     ( $d -> {filemenu} ) -> add( 'separator' );
+     ( $d -> {filemenu} ) -> add( 'command', -label => 'Close',
+				  -font => $menufont,
+				  -accelerator => 'Alt-W',
+				  -state => 'normal',
+		 -command => sub{$d -> {frame} -> WmDeleteWindow and
+				 $d -> DESTROY });
+
+     ( $d -> {editmenu} ) -> add( 'command', -label => 'Undo',
+				-font => $menufont,
+				-state => 'normal',
+				  -accelerator => 'Alt-Z',
+				-command => sub{ws_undo($d)} );
+    ( $d -> {editmenu} ) -> add( 'separator' );
+    ( $d -> {editmenu} ) -> add( 'command', -label => 'Cut',
+			       -font => $menufont,
+			       -state => 'normal',
+				 -accelerator => 'Alt-X',
+			       -command => sub{ws_cut($d)} );
+    ( $d -> {editmenu} ) -> add( 'command', -label => 'Copy',
+			       -font => $menufont,
+				 -accelerator => 'Alt-C',
+			       -state => 'normal',
+			       -command => sub{ws_copy($d)} );
+    ( $d -> {editmenu} ) -> add( 'command', -label => 'Paste',
+			       -font => $menufont,
+				 -accelerator => 'Alt-V',
+			       -state => 'normal',
+			       -command => sub{ws_paste($d)} );
+
+    $d -> {eventframe} =
+	($d -> {frame}) -> Frame( -container => 0 ) -> pack;
+    $d -> {buttonpanel} =
+	($d -> {frame}) -> Frame( -container => 0 ) -> pack;
+
+    $d -> {savebutton} =
+	($d -> {buttonpanel}) -> Button( -text => 'Save',
+					-font => $menufont,
+					 -underline => 0,
+		 -command => sub{&save_day($d -> {month},
+					   $d -> {day},
+					   $d -> {year},
+					   $d)});
+    $d -> {closebutton} =
+	($d -> {buttonpanel}) -> Button( -text => 'Close',
+					-font => $menufont,
+					 -underline => 0,
+			 -command => sub{$d -> {frame} -> WmDeleteWindow});
+    $d -> {deletebutton} =
+	($d -> {buttonpanel}) -> Button( -text => 'Delete',
+					 -underline => 0,
+					-font => $menufont,
+			 -command => sub{&delete_day($d)});
+    $d -> {eventtext} =
+	($d -> {eventframe})
+	  -> Scrolled( 'TextUndo', -height => 25,
+		       -width => 40,
+		       -font => $defaulttextfont,
+		       -scrollbars => 'e',
+		     -background => $textbgcolor,
+		     -foreground => $textfgcolor);
+    $d -> {eventtext} -> delete( '1.0', 'end' );
+    $d -> {eventtext} -> pack;
+    $d -> {savebutton} -> pack( -side => 'left' );
+    $d -> {closebutton} -> pack( -side => 'left' );
+    $d -> {deletebutton} -> pack( -side => 'left' );
+
+    ($d -> {frame}) -> bind( '<Alt-s>', sub{ &save_day( $d -> {month},
+		  $d -> {day}, $d -> {year}, $d )});
+    ($d -> {frame}) -> bind( '<Alt-d>', sub{ &delete_day($d) } );
+    ($d -> {frame}) -> bind( '<Alt-w>',
+	     sub{$d -> {frame} -> WmDeleteWindow and $d -> DESTROY });
+    ($d -> {frame}) -> bind( '<Alt-z>', sub{ws_undo( $d ) } );
+    ($d -> {frame}) -> bind( '<Alt-c>', sub{ws_copy( $d ) } );
+    ($d -> {frame}) -> bind( '<Alt-v>', sub{ws_paste( $d ) } );
+}
+
+sub delete_day {
+    my $d = shift;
+    require Tk::Dialog;
+    my $dialog;
+    my $response;
+
+    $dialog =
+	($d -> {frame}) -> Dialog( -title => 'Delete',
+				   -text => 'Delete This Record?',
+				   -font => $boldfont,
+				   -justify => 'center',
+				   -default_button => 'Cancel',
+				   -buttons => [qw/Ok Cancel/] );
+    $response = $dialog -> Show;
+
+    if ( $response =~ /Ok/ ) {
+	&save_other_days( $d -> {month}, $d -> {day}, $d -> {year} );
+    }
+    $d -> {frame} -> destroy;
+    $self -> {canvas} -> delete('all');
+    &drawmonthgrid( $largecelloption );
+    &insert_day_numbers( $largecelloption );
+    &show_today( $largecelloption );
+    &show_event_days( $largecelloption, $calendar );
+}
+
+# saves the event to the correct day in the @days list.
+# and dump @days list to data file?
+sub save_day {
+    my ( $m, $d, $y, $ed ) = @_;
+    &save_other_days( $m, $d, $y );
+    &save_today( $m, $d, $y, $ed );
+    &clear_calendar();
+    $calendar -> DESTROY;
+    $calendar = &new_calendar( $m, $y );
+    &title_frame();
+    &drawmonthgrid( $largecelloption );
+    &insert_day_numbers();
+}
+
+sub save_other_days {
+    my ( $m, $d, $y ) = @_;
+
+    # rewrite all the records that are not the same day as this one.
+    my $l; my $l2;
+    my $lines = "";
+    my $match = "";
+    my $n_m; my $n_d; my $n_y;
+
+    my $fq_database_name = &database_name;
+    # putting the temporary file in the same directory makes
+    # replacing the old file easier.
+    my $tmpfile = &tmp_database_name;
+
+    open( DB_FILE, "<$fq_database_name" ) or
+	printf STDERR "Cannot open database file $fq_database_name.\n" .
+	"Creating new database:\n" .
+	"This message will disappear the next time you run the program.";
+
+    open( TMP_FILE, ">$tmpfile" ) or
+	printf STDERR "Cannot open temp file $tmpfile.\n";
+
+    # xml header
+    printf TMP_FILE "<?xml version=\"1.0\"?>" . "\n";
+    printf TMP_FILE "<xml>\n";
+
+    # write out all records except the one to replace
+    while ( @lines = <DB_FILE> ) {
+	foreach $l ( @lines ) {
+	    if ( $l =~ m/<day>/s ) {
+		$l2 = $l;
+		next;
+	    } elsif ( $l =~ m/<\/day>/s ) {
+		$l2 .= $l;
+		$n_m = &field( 'month', $l2 );
+		$n_d = &field( 'date', $l2 );
+		$n_y = &field( 'year', $l2 );
+		if ( $l2 !~ m/<month>\n$m.*<\/month>\n<date>\n$d.*<\/date>\n<year>\n$y.*<\/year>/s )  {
+		    printf TMP_FILE $l2;
+		}
+	    } else {
+		$l2 .= $l;
+
+	    }
+	}
+    }
+    close TMP_FILE;
+    rename $tmpfile, $fq_database_name;
+}
+
+sub save_today {
+    my ( $m, $d, $y, $ed ) = @_;
+    my $fq_database_name = &database_name;
+    open DB_FILE, ">>$fq_database_name" or
+      printf STDERR "Cannot open database file $fq_database_name.\n" .
+	"Creating new database:\n" .
+	  "This message will disappear the next time you run the program.";
+    printf DB_FILE "<day>\n";
+    printf DB_FILE "<month>\n";
+    printf DB_FILE $m . "\n";
+    printf DB_FILE "</month>\n";
+    printf DB_FILE "<date>\n";
+    printf DB_FILE $d . "\n";
+    printf DB_FILE "</date>\n";
+    printf DB_FILE "<year>\n";
+    printf DB_FILE $y . "\n";
+    printf DB_FILE "</year>\n";
+    printf DB_FILE "<text>\n";
+    printf DB_FILE ( $ed -> {eventtext} -> get( '1.0', 'end' ) );
+    printf DB_FILE "</text>\n";
+    printf DB_FILE "</day>\n";
+
+    printf DB_FILE "</xml>\n";
+    close DB_FILE;
+}
+
+sub database_name {
+  return $ENV{'HOME'} . "/" . $db_directory . "/" . $db_file;
+}
+
+sub tmp_database_name {
+  return $ENV{'HOME'} . "/" . $db_directory . "/sched_tmp.xml";
+}
+
+# returns a day object
+sub day_select {
+    my $X = shift;
+    my $Y = shift;
+    my $c_x_org; my $c_y_org;
+    my $c;
+    my $i;
+    my $x_org; my $x_max; my $y_org; my $y_max;
+
+    $c = $self -> {canvas};
+    $c_x_org = $c -> rootx;
+    $c_y_org = $c -> rooty;
+
+    for ( $i = 1; $i <= $calendar -> {totaldays}; $i++ ) {
+	$x_org = ( $days[$i] -> {cal_x_org} ) + $c_x_org;
+	$y_org = ( $days[$i] -> {cal_y_org} ) + $c_y_org;
+	$x_max = ( $days[$i] -> {cal_x_max} ) + $c_x_org;
+	$y_max = ( $days[$i] -> {cal_y_max} ) + $c_y_org;
+
+	if ( ( ( $X >= $x_org ) and ( $X <= $x_max ) ) and
+	     ( ( $Y >= $y_org ) and ( $Y <= $y_max ) ) ) 
+	{
+	    return $days[$i];
+	}
+    }
+    return 0;
+}
+
+sub user_find_string {
+  # Must be defined to match empty fields!
+  my $month_q = '';
+  my $day_q = '';
+  my $year_q = '';
+  my $text_q = '';
+  my $matchcase;
+
+  my $finddialog = new MainWindow;
+  my $title = $finddialog
+    -> Label( -text => "Search\nDate or Text:",
+	      -font => $smalltitlefont ) -> pack( -anchor => 'w',
+						  -pady => 5,
+						  -padx => 5 );
+  my $buttonframe = $finddialog -> Frame( -container => '' ) -> pack;
+  my $monthlabel = $buttonframe -> Label( -text => 'Month: ',
+					  -font => $menufont );
+  my $monthentry = $buttonframe -> Entry( -font => $defaulttextfont,
+					  -width => 5,
+					  -textvariable => \$month_q,
+					-background => $entrybgcolor );
+  my $daylabel = $buttonframe -> Label( -text => 'Day: ',
+					-font => $menufont );
+  my $dayentry = $buttonframe -> Entry( -font => $defaulttextfont,
+					-width => 5,
+					-textvariable => \$day_q,
+				      -background => $entrybgcolor );
+  my $yearlabel = $buttonframe -> Label( -text => 'Year: ',
+					 -font => $menufont );
+  my $yearentry = $buttonframe -> Entry( -font => $defaulttextfont,
+					 -width => 5,
+					 -textvariable => \$year_q,
+				       -background => $entrybgcolor );
+  $monthlabel -> pack( -side => 'left', -padx => 2 );
+  $monthentry -> pack( -side => 'left', -padx => 2 );
+  $daylabel -> pack( -side => 'left', -padx => 2 );
+  $dayentry -> pack( -side => 'left', -padx => 2 );
+  $yearlabel -> pack( -side => 'left', -padx => 2 );
+  $yearentry -> pack( -side => 'left', -padx => 2 );
+  my $textframe = $finddialog -> Frame( -container => '' ) -> pack;
+  my $textstringlabel = $textframe -> Label( -text => 'Text String:',
+					     -font => $menufont ) -> 
+					       pack( -side => 'left');
+  my $textstringinput = $textframe
+    -> Entry( -font => $defaulttextfont,
+	      -width => 25,
+	      -background => $entrybgcolor,
+	      -textvariable => \$text_q ) ->
+		pack( -side => 'left',
+		      -pady => 5,
+		      -padx => 20 );
+  my $optionsframe = $finddialog -> Frame( -container => '' )
+    -> pack( -expand => 1, -fill => 'both' );
+  my $matchcasebutton = $optionsframe -> Checkbutton( -text => 'Match Case',
+				-variable => \$matchcase,
+				-font => $menufont )
+    -> pack( -side => 'left', -padx => 15, -pady => 5 );
+  my $buttonframe = $finddialog -> Frame( -container => 0 ) -> pack;
+  my $searchbutton = $buttonframe
+    -> Button( -text => 'Search',
+	       -font => $menufont,
+	       -command =>
+	       sub {
+		 &parse_query( $month_q, $day_q,
+			       $year_q, $text_q,
+			       $matchcase );
+		 $finddialog -> WmDeleteWindow
+			       } )
+      -> pack(-side => 'left', -padx => 5, -pady => 5);
+  my $searchbutton = $buttonframe
+    -> Button( -text => 'Cancel',
+	       -font => $menufont,
+	       -command => sub{$finddialog -> WmDeleteWindow})
+  -> pack(-side => 'right', -padx => 5, -pady => 5);
+}
+
+sub parse_query {
+    my ($m, $d, $y, $text, $matchcase) = @_;
+    my $records = '';
+    my $de;
+
+    if ($m or $d or $y) {
+      $records = &find_db_day( $m, $d, $y );
+    } elsif ( $text ) {
+	$records = &find_db_text( $text, $matchcase );
+    }
+    return if $records !~ /\<day\>/;
+
+    foreach $de (@day_eds) {
+	if ( ! defined( $de -> {frame} ) ) {
+	    $de = &day_editor_new();
+	    last;
+	}
+    }
+    if( ! defined $de -> {frame}) {
+      $de = &day_editor_new;
+      push @day_eds, ($de);
+    }
+
+    $de -> {day} = &field( 'date', $records ) ;
+    $de -> {month} = &field( 'month', $records );
+    $de -> {year} = &field( 'year', $records );
+    chop( $de -> {day} );
+    chop( $de -> {month} );
+    chop( $de -> {year} );
+    &init_day_editor_widgets( $de );
+    my $t = &field( 'text', $records );
+    ($de -> {eventtext}) -> insert( 'end', $t );
+}
+
+sub reclist {
+    my $home_dir = $ENV{ "HOME" };
+    my ($fl, $recstr);
+    my $fq_database_name = 
+	$home_dir . "/" . $db_directory . "/" . $db_file;
+
+    open( DB_FILE, "<$fq_database_name" ) or
+	printf STDERR "Cannot open database file $fq_database_name.\n";
+    while (defined ($fl = <DB_FILE>)) {
+      $recstr .= $fl;
+    }
+    close DB_FILE;
+    my @records = split /\<\/day\>/, $recstr;
+    return @records;
+}
+
+# returns all matching records in any of m, d, y in $record.
+sub find_db_day {
+    my ( $month, $date, $year ) = @_;
+    my @records = &reclist;
+    foreach my $rec (@records) {
+      return $rec if &record_match( $month, $date, $year, $rec);
+    }
+}
+
+sub record_match {
+    my ( $m, $d, $y, $record ) = @_;
+    return 1 if (
+	 ( grep m/\<date\>\n$d\n\<\/date\>/s, $record ) &&
+	 ( grep m/\<month\>\n$m\n\<\/month\>/s, $record ) &&
+	 ( grep m/\<year\>\n$y\n<\/year>/s, $record )
+		);
+    return 0;
+}
+
+sub find_db_text {
+    my ( $t, $matchcase ) = @_;
+    my @records = &reclist;
+    foreach my $rec (@records) {
+      return $rec if &text_match($t, $rec, $matchcase);
+    }
+}
+
+sub text_match {
+    my ( $t, $record, $matchcase ) = @_;
+
+    if( $matchcase ) {
+      return 1 if ( grep m/\<text\>\n.*?$t.*?\<\/text\>/s, $record );
+    } else {
+      return 1 if ( grep m/\<text\>\n.*?$t.*?\<\/text\>/is, $record );
+    }
+    return "";
+}
+
+# returns the string surrounded by <label>, </label>
+sub field {
+    my ( $label, $record ) = @_;
+    return '' if ! $record;
+    my $startrec = '<' . $label . '>';
+    my $endrec = '</' . $label . '>';
+    $record =~ m/$startrec\n(.*)$endrec/s;
+    return $1;
+}
+
+sub exit_program {
+    exit( 0 ) ;
+}
+
+sub ws_cut {
+    my $self = shift;
+    my $selection;
+    if ( ! (($self -> {eventtext}) -> tagRanges('sel')) ) { return; }
+    # per clipboard.txt, this asserts workspace text widget's 
+    # ownership of X display clipboard, and clears it.
+    ($self -> {eventtext}) -> clipboardClear;
+    $selection = ($self -> {eventtext}) 
+	-> SelectionGet(-selection => 'PRIMARY',
+			-type => 'STRING' );
+    # Appends PRIMARY selection to X display clipboard.
+    ($self -> {eventtext}) -> clipboardAppend($selection);
+    ($self ->{eventtext}) -> 
+	delete(($self -> {eventtext}) -> tagRanges('sel'));
+    $clipboard = $selection;   # our  clipboard, not X's.
+    return $selection;
+}
+
+sub ws_copy {
+    my $self = shift;
+    my $selection;
+    if ( ! (($self -> {eventtext}) -> tagRanges('sel')) ) { return; }
+    # per clipboard.txt, this asserts workspace text widget's 
+    # ownership of X display clipboard, and clears it.
+    ($self -> {eventtext}) -> clipboardClear;
+    $selection = ($self -> {eventtext}) 
+	-> SelectionGet(-selection => 'PRIMARY',
+			-type => 'STRING' );
+    # Appends PRIMARY selection to X display clipboard.
+    ($self -> {eventtext}) -> clipboardAppend($selection);
+    $clipboard = $selection;   # our  clipboard, not X's.
+    return $selection;
+}
+
+sub ws_paste {
+    my $self = shift;
+    my $selection;
+    my $point;
+    # Don't use CLIPBOARD because of a bug? in PerlTk...
+    #
+    # Checks PRIMARY selection, then X display clipboard, 
+    # and returns if neither is defined.
+#    ($self -> {eventtext}) -> 
+#	selectionOwn(-selection => 'CLIPBOARD');
+#    if ( ! (($self -> {eventtext}) -> tagRanges('sel')) 
+#	 or (($selection =  ($self -> {eventtext}) 
+#	-> SelectionGet(-selection => 'PRIMARY',
+#			-type => 'STRING')) == '') ) {
+#	return; 
+#    }
+#    if ($self -> {eventtext} -> tagRanges('sel')) {
+#	$selection = ($self -> {eventtext}) 
+#	    -> SelectionGet(-selection => 'PRIMARY',
+#			    -type => 'STRING');
+#    } else {
+#	$selection = $clipboard;
+#    }
+    $selection = ($self -> {eventtext}) -> clipboardGet;
+    $point = ($self -> {eventtext}) -> index("insert");
+    ($self -> {eventtext}) -> insert( $point,
+				      $selection);
+    return $selection;
+}
+
+sub ws_undo {
+    my $self = shift;
+    my $undo;
+    $undo = ($self -> {eventtext}) -> undo;
+    return $self
+}
+
+sub large_calendar {
+    if ( $largecelloption == '1' ) {
+	return;
+    }
+    $largecelloption = '1';
+    $self -> {canvas} -> DESTROY if defined $self -> {canvas};
+    $self -> {frame} -> DESTROY if defined $self -> {canvas};
+    &init_widgets( $largecelloption );
+}
+
+sub small_calendar {
+    if ( $largecelloption == '0' ) {
+	return;
+    }
+    $largecelloption = '0';
+    $self -> {canvas} -> DESTROY if defined $self -> {canvas};
+    $self -> {frame} -> DESTROY if defined $self -> {canvas};
+    &init_widgets( $largecelloption );
+}
+
+sub about {
+  require Tk::Dialog;
+  ($self -> {frame})
+    -> Dialog( -title => 'About',
+	       -text => "Deskpad\n" . "$VERSION\n " .
+	       "Written by Robert Kiesling, " .
+	       "rkiesling\@mainmatter.com",
+	       -font => $menufont,
+	       -justify => 'center',
+	       -default_button => 'Ok!',
+	       -buttons => [qw/Ok!/] ) -> Show();
+}
+
+sub self_help {
+    my $own_filename = __FILE__;
+    my $help_text;
+    my $helpwindow;
+
+    open( HELP, ("pod2text <" . $own_filename . " |") ) or $help_text =
+"Unable to process help text.  Please refer to the file deskpad.txt.";
+    while (<HELP>) {
+	$help_text .= $_;
+    }
+    close HELP;
+
+    $helpwindow = new MainWindow;
+    $helpwindow -> Scrolled( 'Message', -text => $help_text,
+			    -justify => 'left',
+			    -font => $defaulttextfont,
+			   -scrollbars => 'e' ) -> pack;
+}
+
+
+# total days in each month, 1-12, to be adjusted for leap years
+my (@mon) = (   0,
+   31, 29, 31, 30,
+   31, 30, 31, 31,
+   30, 31, 30, 31 );
+
+sub new_calendar {
+    # if called with month (1-12), year, use that, if not, return
+    # current month.
+
+    my $class = 'Tk::Widget';
+
+    my $month;
+    my $day;
+    my $year;
+
+    if ( (@_) ) {
+	$month = shift;
+	$year = shift;
+	$day = 1;
+    } else {
+	$month = (localtime)[4] + 1;
+	$day = (localtime)[3];
+	$year = (localtime)[5] + 1900;
+    }
+    my $date = localtime(time);
+    my $self = {
+	name => 'Calendar',
+	month => $month,
+	day => $day,
+	year => $year,
+	startday => '',
+	totaldays => '',
+	posix-date => $date
+	};
+    bless($self, $class);
+
+    $self -> {startday} = &first_day_of_month( $self -> {year},
+					       $self -> {month} );
+
+    $self -> {monthname} = @months[$self -> {month}];
+    $self -> {totaldays} = @mon[$self -> {month}];
+    if ( ( $self -> {month} ) == 2 ) {
+	if ( ( ( $self -> {year} ) % 4 ) == 0 ) {
+	    $self -> {totaldays} = 29;
+	} else {
+	    $self -> {totaldays} = 28;
+	}
+    }
+    return $self;
+}
+
+# adapted from xcalendar.c
+# returns day of week of Jan1 of given year, 1-7
+sub first_day_of_year {
+    my ($y) = @_;
+    my $d;
+    $d = 4 + $y + ($y + 3)/4;
+    if ( $y > 1800 ) {
+	$d -= ( $y - 1701 ) / 100;
+	$d += ( $y - 1601 ) / 400;
+    }
+    if ( $y > 1752 ) {
+	$d += 3;
+    }
+    return($d%7);
+}
+
+
+# return first day of month for given y, m
+sub first_day_of_month{
+    my ($y, $m) = @_;
+    my $d;
+    my $i;
+    my $x;
+
+    $mon[2] = 29;
+    $mon[9] = 30;
+
+    $d = &first_day_of_year($y);
+    $x = ((&first_day_of_year( $y + 1 )  + 7 - $d ) % 7 );
+
+    if ( $x == 1 ) { $mon[2] = 28 }
+    elsif ( $x == 2 ) {  }
+    else { $mon[9] = 19 }
+    for ( $i = 1; $i < $m; $i = $i + 1 )
+    {
+	$d += $mon[$i];
+    }
+
+    $d = $d % 7;
+    if ( $d > 0 ) {
+    }
+    else {
+	$d = 7;
+    }
+    $d = $d + 1 - 7;
+    if ( $d > 0 ) {
+	return($d);
+    }
+    else
+    {
+	return (7 + $d);
+    }
+}
+
+sub DESTROY {
+    my ($obj) = @_;
+    foreach $w ( $self -> children ) {
+      if( defined ( $w -> {frame} ) ) {
+	$w -> destroy;
+      }
+    }
+}
+
+# should the name be "usecond"?
+sub requirecond {
+  my ($modulename) = @_;
+  my ($filename, $fullname, $result);
+  $filename = $modulename;
+  $filename .= '.pm' if $filename !~ /.pm$/;
+  $filename =~ s/\:\:/\//;
+  foreach my $prefix ( @INC ) {
+    $fullname = "$prefix/$filename";
+    if( -f $fullname ) {
+      eval "use $modulename";
+      return '1';
+    }
+  }
+  return '';
+}
+
+$largecelloption = '0';
+&init_db();
+$calendar = &new_calendar();
+&init_widgets( $largecelloption );
+
+MainLoop;
+
