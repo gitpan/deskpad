@@ -1,0 +1,21 @@
+Begin3
+Title:		deskpad
+Version:        0.74
+Entered-date:   18 January 2008
+Description:	A calendar program like xcalendar, written 
+                in Perl and Perl/Tk.  Further information 
+                about these packages is at 
+                http://www.cpan.org/.
+Keywords:	Perl Calendar Schedule PerlTk xcalendar
+Author:		rkies@cpan.org (Robert Kiesling)
+Maintained-by:	rkies@cpan.org (Robert Kiesling)
+Primary-site:   metalab.unc.edu /apps/reminder/datebooks
+			38726 deskpad
+			 1177 README
+			18007 COPYING
+                         5366 deskpad.man
+                         1368 deskpad.txt
+			  677 deskpad.lsm
+Platforms:      Linux/Unix
+Copying-policy: GPL
+End
