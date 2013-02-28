@@ -4,10 +4,16 @@ Deskpad
     Version: $Revision: 1.1.1.1 $
 
     A rather lightweight calendar program written in Perl/Tk. In
-    addition to Perl, you'll need to have Perl/Tk on your system.
-    Recent source code versions are can be found on http://www.cpan.org/,
-    and binary distributions for Red Hat Linux 6.2 and 7.0 (i386), and 
-    Sparc Solaris 7, are at: http://www.mainmatter.com/perltk/.
+    addition to Perl and its standard library modules, you'll need to
+    have the Perl/Tk and Date::Calc modules.  You can download the
+    source code at http://www.cpan.org/, and there are binary
+    distributions available for many platforms.
+
+    Use of the Date::Calc module is specific for more recent versions.
+    (The first weekday of the month method wasn't available when I first
+    wrote deskpad.)  If for some reason you prefer to use the older
+    routine to find the first weekday of the month, refer to the comments
+    in the source code.
 
     Install by copying the 'deskpad' program into your home directory
     or any directory that you have write permissions in.  

@@ -57,6 +57,14 @@ use Tk;
 use Tk::Canvas;
 use Tk::TextUndo;
 use IO::File;
+#
+# If you prefer to use the older routine to calculate the 
+# first weekday of the month, you can omit (or comment)
+# this line, and refer to the comments in the 
+# first_day_of_month () subroutine, below. 
+#
+use Date::Calc qw(Day_of_Week);;
+
 @ISA = qw(Tk::Canvas);
 
 my (@abbrevdays) =  ( "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" );
@@ -1284,39 +1292,54 @@ sub first_day_of_year {
 
 # return first day of month for given y, m
 sub first_day_of_month{
+
     my ($y, $m) = @_;
-    my $d;
-    my $i;
-    my $x;
 
-    $mon[2] = 29;
-    $mon[9] = 30;
+    my $dow = Day_of_Week ($y, $m, 1);
+    return $dow + 1;
 
-    $d = &first_day_of_year($y);
-    $x = ((&first_day_of_year( $y + 1 )  + 7 - $d ) % 7 );
+#
+# This older routine may be more convenient if you
+# don't have the Date::Calc module, but there
+# are a few month/year combinations which cause it to
+# return the wrong first day of the month, so use
+# it at your own risk.
+#
 
-    if ( $x == 1 ) { $mon[2] = 28 }
-    elsif ( $x == 2 ) {  }
-    else { $mon[9] = 19 }
-    for ( $i = 1; $i < $m; $i = $i + 1 )
-    {
-	$d += $mon[$i];
-    }
-
-    $d = $d % 7;
-    if ( $d > 0 ) {
-    }
-    else {
-	$d = 7;
-    }
-    $d = $d + 1 - 7;
-    if ( $d > 0 ) {
-	return($d);
-    }
-    else
-    {
-	return (7 + $d);
-    }
+#    my ($y, $m) = @_;
+#    my $d;
+#    my $i;
+#
+#    my $x;
+#
+#    $mon[2] = 29;
+#    $mon[9] = 30;
+#
+#    $d = &first_day_of_year($y);
+#    $x = ((&first_day_of_year( $y + 1 )  + 7 - $d ) % 7 );
+#
+#    if ( $x == 1 ) { $mon[2] = 28 }
+#    elsif ( $x == 2 ) {  }
+#    else { $mon[9] = 19 }
+#    for ( $i = 1; $i < $m; $i = $i + 1 )
+#    {
+#	$d += $mon[$i];
+#    }
+#
+#    $d = $d % 7;
+#    if ( $d > 0 ) {
+#    }
+#    else {
+#	$d = 7;
+#    }
+#    $d = $d + 1 - 7;
+#    if ( $d > 0 ) {
+#	return($d);
+#    }
+#    else
+#    {
+#	return (7 + $d);
+#    }
 }
 
 sub DESTROY {
